@@ -32,7 +32,7 @@ export async function isUserMaintainer(userId: string): Promise<boolean> {
     .from('github_installation_users')
     .select('installation_id, github_installations!inner(uninstalled_at)')
     .eq('user_id', userId)
-    .eq('github_installations.uninstalled_at', null)
+    .is('github_installations.uninstalled_at', null)
     .limit(1);
 
   const has = (data ?? []).length > 0;

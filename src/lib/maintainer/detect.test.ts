@@ -12,10 +12,10 @@ vi.mock('@/lib/cache', () => ({
   cacheSet: vi.fn(),
 }));
 
-const applyFilters = (rows: unknown, filters: Array<[string, unknown]>): unknown => {
+const applyFilters = (rows: unknown, filters: Array<['eq' | 'is', string, unknown]>): unknown => {
   if (!Array.isArray(rows)) return rows;
   let filtered = rows as Array<Record<string, unknown>>;
-  for (const [col, val] of filters) {
+  for (const [op, col, val] of filters) {
     if (col.startsWith('github_installations.')) {
       const field = col.split('.')[1] as string;
       filtered = filtered.filter((r) => {
@@ -24,6 +24,10 @@ const applyFilters = (rows: unknown, filters: Array<[string, unknown]>): unknown
           | Record<string, unknown>
           | null
           | undefined;
+        if (op === 'is') {
+          if (val === null) return !!joined && joined[field] === null;
+          return !!joined && joined[field] === val;
+        }
         if (!joined) return val === null ? false : true;
         return joined[field] === val;
       });
@@ -35,19 +39,23 @@ const applyFilters = (rows: unknown, filters: Array<[string, unknown]>): unknown
 const mockSupabase = (mockTables: Record<string, unknown>) => {
   const mockClient = {
     from: vi.fn().mockImplementation((table: string) => {
-      const eqFilters: Array<[string, unknown]> = [];
+      const filters: Array<['eq' | 'is', string, unknown]> = [];
       const chain = {
         select: vi.fn().mockReturnThis(),
         eq: vi.fn().mockImplementation((col: string, val: unknown) => {
-          eqFilters.push([col, val]);
+          filters.push(['eq', col, val]);
+          return chain;
+        }),
+        is: vi.fn().mockImplementation((col: string, val: unknown) => {
+          filters.push(['is', col, val]);
           return chain;
         }),
         limit: vi.fn().mockReturnThis(),
         maybeSingle: vi.fn().mockImplementation(() => {
-          return Promise.resolve({ data: applyFilters(mockTables[table], eqFilters) ?? null });
+          return Promise.resolve({ data: applyFilters(mockTables[table], filters) ?? null });
         }),
         then: function (resolve: (value: unknown) => void) {
-          resolve({ data: applyFilters(mockTables[table], eqFilters) ?? null });
+          resolve({ data: applyFilters(mockTables[table], filters) ?? null });
         },
       };
       return chain;
