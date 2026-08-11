@@ -235,13 +235,14 @@ async function discoverForUser(
         .in('repo_full_name', repoDelete);
     }
     if (repoUpsert.length > 0) {
-      await sb.from('installation_user_repos').insert(
+      await sb.from('installation_user_repos').upsert(
         repoUpsert.map((g) => ({
           installation_id: install.id,
           user_id: userId,
           repo_full_name: g.repoFullName,
           permission_level: g.permissionLevel,
         })),
+        { onConflict: 'installation_id,user_id,repo_full_name' },
       );
     }
 

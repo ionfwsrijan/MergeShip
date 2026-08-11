@@ -313,6 +313,111 @@ describe('maintainerDiscover', () => {
     );
   });
 
+  it('upserts permission changes on already-granted repos', async () => {
+    const installUsers = sb();
+
+    const userRepos = sb({
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      upsert: vi.fn().mockResolvedValue({}),
+      then: (resolve: (v: unknown) => void) =>
+        Promise.resolve({
+          data: [{ repo_full_name: 'test-org/repo-1', permission_level: 'maintain' }],
+          error: null,
+        }).then(resolve),
+    });
+
+    wire({
+      github_installation_users: installUsers,
+      installation_repositories: sb({
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockResolvedValue({
+          data: [{ repo_full_name: 'test-org/repo-1' }],
+        }),
+      }),
+      installation_user_repos: userRepos,
+    });
+
+    let selectCallCount = 0;
+    installUsers.select = vi.fn().mockReturnThis();
+    installUsers.eq = vi.fn().mockImplementation(() => {
+      selectCallCount += 1;
+      if (selectCallCount <= 2) {
+        return {
+          ...installUsers,
+          then: (resolve: (v: unknown) => void) => {
+            if (selectCallCount === 1) {
+              return Promise.resolve({
+                data: [
+                  {
+                    installation_id: 1,
+                    github_installations: {
+                      id: 1,
+                      account_type: 'Organization',
+                      account_login: 'test-org',
+                      uninstalled_at: null,
+                    },
+                  },
+                ],
+              }).then(resolve);
+            }
+            return Promise.resolve({ data: [] }).then(resolve);
+          },
+        };
+      }
+      return installUsers;
+    });
+
+    const octokit = {
+      orgs: {
+        getMembershipForUser: vi.fn().mockRejectedValue(new Error('404')),
+      },
+      repos: {
+        getCollaboratorPermissionLevel: vi.fn().mockResolvedValue({
+          data: { permission: 'admin' },
+        }),
+      },
+    };
+    vi.mocked(getInstallOctokit).mockResolvedValue(octokit as never);
+    vi.mocked(decideOrgGrant).mockReturnValue(null);
+    vi.mocked(decideRepoGrant).mockReturnValue('repo_admin');
+    vi.mocked(reconcileRepoGrants).mockReturnValue({
+      toUpsert: [{ repoFullName: 'test-org/repo-1', permissionLevel: 'admin' }],
+      toDelete: [],
+    });
+    vi.mocked(reconcileGrants).mockReturnValue({
+      toUpsert: [],
+      toDelete: [],
+    });
+
+    const result = await run({ event: ev(), step });
+
+    expect(reconcileRepoGrants).toHaveBeenCalledWith(
+      [{ repoFullName: 'test-org/repo-1', permissionLevel: 'maintain' }],
+      [{ repoFullName: 'test-org/repo-1', permissionLevel: 'admin' }],
+    );
+    expect(userRepos.upsert).toHaveBeenCalledWith(
+      [
+        {
+          installation_id: 1,
+          user_id: 'u1',
+          repo_full_name: 'test-org/repo-1',
+          permission_level: 'admin',
+        },
+      ],
+      { onConflict: 'installation_id,user_id,repo_full_name' },
+    );
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        user: 'u1',
+        installs: 1,
+        toUpsert: 0,
+        toDelete: 0,
+      }),
+    );
+  });
+
   it('skips recently discovered users in sweep', async () => {
     wire({
       github_installation_users: sb({
